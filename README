@@ -1,0 +1,145 @@
++----------------------+
+[+] kGuard Distribution|
++----------------------+
+
+Our kGuard bundle contains the following tools:
+
+	[*] `kguard': a GCC plugin that implements CFA-based control-flow
+		confinement and code inflation, as specified in our papers.
+		[-] "kGuard: Lightweight Kernel Protection against
+			Return-to-user Attacks." In Proc. of USENIX Sec,
+			pages 459--474, 2012.
+		[-] "kGuard: Lightweight Kernel Protection." USENIX ;login:,
+			37(6):7--14, December 2012.
+
+	[*] `kvld': a helper tool that detects and reports unprotected
+		(exploitable) control transfer instructions in ELF objects,
+		along with a `kguard' instrumentation summary.
+
+Although kGuard is a cross-platform solution, both `kguard' and `kvld' were
+mainly evaluated in x86/x86-64 Linux. Earlier versions were successfully used
+with members of the BSD family and the ARM platform (AArch32), but our latest
+release was solely developed and tested on Debian GNU/Linux v6 and v7.
+
+
++------------------+
+[+] Building kGuard|
++------------------+
+
+What follows are the steps to build `kguard' from source. We assume a Debian
+GNU/Linux distribution (v6, v7, or later; x86/x86-64) and the latest release
+of kGuard (v3.141592alpha).
+
+	[*] Dependencies:
+
+		[-] GNU make v3.81 (or later), GNU binutils v2.22 (or later).
+		[-] GCC v4.5, v4.6, or v4.7 (versions >=4.8 are not supported).
+		[-] libbsd v0.4.2 (or later).
+
+	[*] Build steps:
+
+		1. Download:
+			wget https://www.cs.columbia.edu/~vpk/research/kguard/kguard-src.tar.gz
+		2. Unpack:
+			tar xzf kguard-src.tar.gz
+		3. Build:
+			cd kguard-src && make
+
+If the build process is successful, `kguard' (kguard.so) will be made available
+in the working directory; `kvld' is implemented as an AWK script, and
+therefore, no compilation is necessary. In Debian and Debian-derived
+distributions (e.g., Ubuntu), the build dependencies can be satisfied by
+installing the following packages: 'build-essential, gcc-4.{5, 6, 7}-plugin-dev,
+libbsd-dev'. Note that we recommend building `kguard' with the same version of
+GCC used to compile protected kernels, by setting the 'CC' and 'CFLAGS'
+variables, accordingly, in Makefile. Lastly, 'kguard.h' includes the default
+value(s) for the starting address of the kernel '.text' segment. Hence, if
+kGuard is used in experimental settings, 'KADDR_DFL' needs to be modified
+accordingly.
+
+
++---------------+
+[+] Using kGuard|
++---------------+
+
+Once `kguard' (kguard.so) is successfully built, one can start compiling
+kGuard-protected kernels by leveraging the '-fplugin' and '-fplugin-arg'
+parameters of GCC. In Linux, which uses the kBuild system, we recommend
+supplying the respective parameters through the 'CFLAGS' variable or by
+directly editing the main Makefile of the kernel and altering 'KBUILD_CFLAGS'.
+kGuard accepts 3 parameters: 'stub' (address or symbol), 'nop' (decimal
+integer), and 'log' (file path). 'stub' provides the name of the runtime
+violation handler, 'nop' stores the maximum size of the random NOP sled
+inserted before each CFA, and 'log' is used to define an instrumentation
+logfile for CFA motion. In addition, our latest prototype supports the
+'retprot' (boolean) flag for controlling the instrumentation of `ret'
+instructions (x86/x86-64 only). The default parameter values are the following:
+'stub = panic', 'nop = 16', 'log = NULL', and 'retprot = 1'.
+
+In common settings, appending '-fplugin=<full-path>/kguard.so' to the build
+flags should be sufficient for compiling a kGuard-protected kernel; specific
+parameters can be further tailored to need with '-fplugin-arg'. For example,
+the (maximum) size of the NOP sleds can be doubled (i.e., from 16 to 32 NOPs),
+and the runtime violation handler can be redefined (e.g., from panic to chndl),
+with '-fplugin-arg-kguard-nop=32' and '-fplugin-arg-kguard-stub=chndl',
+respectively. Note that certain (sub)directories of the kernel source tree may
+have to be excluded from being instrumented with `kguard'. Examples include
+early, machine-dependent bootstrap code (e.g., arch/x86/boot/ in x86/x86-64
+Linux), the vDSO (i.e., arch/x86/vdso in x86-64 Linux), etc.
+
+In recent Linux kernels, the above can be performed with the 'CFLAGS_REMOVE'
+macro of kBuild, whereas in all other cases, every kGuard-related directive
+should be manually stripped from the build flags. The latest Linux kernel that
+has been successfully tested with kGuard is v3.2; to compile that version,
+append '-fplugin=<full-path>/kguard.so' to 'KBUILD_CFLAGS' in the main
+Makefile, and the following snippet(s) to arch/x86/vdso/Makefile:
+
+CFLAGS_REMOVE_vdso-note.o	= -fplugin=<full-path>/kguard.so
+CFLAGS_REMOVE_vclock_gettime.o	= -fplugin=<full-path>/kguard.so
+CFLAGS_REMOVE_vgetcpu.o		= -fplugin=<full-path>/kguard.so
+CFLAGS_REMOVE_vvar.o		= -fplugin=<full-path>/kguard.so
+
+`kvld' can be used with any x86/x86-64 kGuard-instrumented ELF file (kobj) as
+follows:
+
+objdump -d <kobj> | cut -f3 | kvld.
+
+
++--------------+
+[+] Limitations|
++--------------+
+
+kGuard is implemented as an RTL IR optimization pass, and as such, it does not
+handle assembler code (both "inline" and external). Hence, any indirect
+control-flow transfer embedded in assembly snippets is left unprotected. Note,
+however, that this is not a fundamental limitation of kGuard, but rather an
+implementation decision. In principle, one can incorporate the techniques
+presented in our papers (i.e., CFA-based control-flow confinement, code
+inflation, and CFA motion) in the assembler, instead of the compiler, as they
+do not require high-level semantics.
+
+In addition, our released prototype does not include support for the following
+features:
+
+	[*] Liveness analysis for minimizing register spilling in CFA guards.
+		Even though initial versions of kGuard included support for
+		that feature, we had to significantly rewrite the respective
+		code when we ported `kguard' from GCC v4.5 to v4.6. Hence, to
+		avoid fragmentation, and given the limited performance benefits 
+		of the feature, we opted for a scheme that always spills a
+		fixed register (i.e., %edi/%rdi in x86/x86-64).
+
+	[*] CFA motion. Although `kguard' supports the 'log' parameter, which
+		records all necessary information to perform CFA relocation, it 
+		does not handle the actual rewriting of the '.text' segment of
+		the kernel/modules. The latter is performed through a kernel
+		component that is OS- and architecture-specific. In our paper(s)
+		we describe, in detail, how to implement CFA motion in x86
+		Linux (kernel v2.6.32) and {Free, Net}BSD.
+	
+	[*] NOP sled in the beginning of the kernel '.text' segment. Code
+		inflation randomizes the starting address of the kernel '.text' 
+		segment, by inserting a (huge) NOP sled of random length its
+		beginning. Again, though original versions of `kguard' included 		support for that feature, we decided to remove it from our
+		latest release, as many commodity OSes begun employing
+		kernel-space ASLR.
